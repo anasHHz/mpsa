@@ -1,0 +1,14 @@
+# requirements.txt
+amzpy
+streamlit
+pandas
+plotly
+scikit-learn
+nltk
+transformers
+torch
+sentencepiece
+matplotlib
+seaborn
+requests
+beautifulsoup4
