@@ -1,96 +1,113 @@
-# src/data_acquisition/amazon_scraper_amzpy.py
-from amzpy import AmazonScraper
+"""
+Sentiment Analysis Module - FinBERT Implementation
+Provides accurate sentiment classification for financial/business text
+"""
 import pandas as pd
-from typing import List, Dict, Optional
-import time
-import random
+from typing import List, Dict, Optional, Tuple
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
 
-class AmazonScraperAmzPy:
-    def __init__(self, country_code: str = "in", max_reviews_per_product: int = 100):
-        self.scraper = AmazonScraper(country_code=country_code)
-        self.max_reviews = max_reviews_per_product
-        self.country_code = country_code
+class FinBertSentimentAnalyzer:
+    """
+    FinBERT-based sentiment analyzer optimized for financial and business reviews.
     
-    def search_products(self, query: str, max_pages: int = 2) -> List[Dict]:
-        """Search for products by query"""
+    Uses the pre-trained FinBERT model from Hugging Face for accurate sentiment
+    classification with confidence scores.
+    """
+    
+    def __init__(self, model_name: str = "ProsusAI/finbert"):
+        """
+        Initialize the FinBERT sentiment analyzer.
+        
+        Args:
+            model_name: Hugging Face model identifier for FinBERT
+        """
+        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+        self.model.eval()
+        self.labels = ['negative', 'neutral', 'positive']
+    
+    def analyze_single(self, text: str) -> Dict[str, float]:
+        """
+        Analyze sentiment of a single text.
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Dictionary with sentiment scores and label
+        """
+        if not text or not isinstance(text, str) or len(text.strip()) == 0:
+            return {
+                'sentiment_label': 'neutral',
+                'sentiment_score': 0.0,
+                'negative': 0.0,
+                'neutral': 1.0,
+                'positive': 0.0,
+                'confidence': 1.0
+            }
+        
         try:
-            products = self.scraper.search_products(query=query, max_pages=max_pages)
-            return products
+            inputs = self.tokenizer(
+                text[:512],  # FinBERT max length
+                return_tensors='pt',
+                truncation=True,
+                max_length=512
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.softmax(logits, dim=1)[0].cpu().numpy()
+            
+            label_idx = np.argmax(probabilities)
+            label = self.labels[label_idx]
+            
+            # Calculate sentiment score: positive(+1) vs negative(-1)
+            sentiment_score = float(probabilities[2] - probabilities[0])
+            
+            return {
+                'sentiment_label': label,
+                'sentiment_score': sentiment_score,
+                'negative': float(probabilities[0]),
+                'neutral': float(probabilities[1]),
+                'positive': float(probabilities[2]),
+                'confidence': float(probabilities[label_idx])
+            }
         except Exception as e:
-            print(f"Error searching products: {e}")
-            return []
+            print(f"Error analyzing text: {e}")
+            return {
+                'sentiment_label': 'neutral',
+                'sentiment_score': 0.0,
+                'negative': 0.33,
+                'neutral': 0.34,
+                'positive': 0.33,
+                'confidence': 0.0
+            }
     
-    def get_product_details(self, asin: str) -> Optional[Dict]:
-        """Get detailed product information"""
-        try:
-            url = f"https://www.amazon.{self.country_code}/dp/{asin}"
-            product = self.scraper.get_product_details(url)
-            return product
-        except Exception as e:
-            print(f"Error getting product details for {asin}: {e}")
-            return None
-    
-    def get_product_reviews(self, asin: str, max_pages: int = 3) -> List[Dict]:
-        """Get reviews for a specific product"""
-        try:
-            url = f"https://www.amazon.{self.country_code}/dp/{asin}"
-            reviews = self.scraper.get_reviews(url, max_pages=max_pages)
-            
-            # Format reviews to match our schema
-            formatted_reviews = []
-            for review in reviews[:self.max_reviews]:
-                formatted_review = {
-                    "review_id": review.get('review_id', f"{asin}_{len(formatted_reviews)}"),
-                    "review_text": review.get('review_text', ''),
-                    "score": review.get('rating', 0),
-                    "user_name": review.get('reviewer_name', 'Anonymous'),
-                    "date": review.get('review_date', ''),
-                    "title": review.get('review_title', ''),
-                    "platform": "amazon",
-                    "product_id": asin,
-                    "verified_purchase": review.get('verified_purchase', False)
-                }
-                formatted_reviews.append(formatted_review)
-            
-            return formatted_reviews
-            
-        except Exception as e:
-            print(f"Error getting reviews for {asin}: {e}")
-            return []
-    
-    def scrape_competitive_products(self, query: str, competitor_names: List[str]) -> pd.DataFrame:
-        """Scrape multiple competing products"""
-        all_reviews = []
+    def analyze_batch(self, texts: List[str], batch_size: int = 32) -> pd.DataFrame:
+        """
+        Analyze sentiment for multiple texts efficiently.
         
-        # Search for products
-        products = self.search_products(query)
-        print(f"Found {len(products)} products for query: {query}")
-        
-        # Filter products by competitor names
-        competitor_asins = []
-        for product in products:
-            product_title = product.get('title', '').lower()
-            if any(comp.lower() in product_title for comp in competitor_names):
-                competitor_asins.append(product['asin'])
-        
-        print(f"Found {len(competitor_asins)} competitor products")
-        
-        # Get reviews for each competitor product
-        for asin in competitor_asins[:5]:  # Limit to top 5 competitors
-            print(f"Scraping reviews for ASIN: {asin}")
-            product_details = self.get_product_details(asin)
-            reviews = self.get_product_reviews(asin)
+        Args:
+            texts: List of texts to analyze
+            batch_size: Number of texts to process at once
             
-            for review in reviews:
-                review.update({
-                    "product_name": product_details.get('title', 'Unknown') if product_details else 'Unknown',
-                    "brand": product_details.get('brand', 'Unknown') if product_details else 'Unknown',
-                    "price": product_details.get('price', 0) if product_details else 0
-                })
-            
-            all_reviews.extend(reviews)
-            
-            # Rate limiting
-            time.sleep(random.uniform(2, 4))
+        Returns:
+            DataFrame with sentiment analysis results
+        """
+        results = []
         
-        return pd.DataFrame(all_reviews)
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            for text in batch:
+                result = self.analyze_single(text)
+                result['review_text'] = text
+                results.append(result)
+        
+        return pd.DataFrame(results)

@@ -1,12 +1,23 @@
-# src/visualization/dashboards.py - Updated for FinBERT
+"""
+Business Intelligence Dashboard - Visualization Components
+Generates interactive dashboards for sentiment and competitive analysis
+"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from typing import Dict, List, Any
+
 
 class BusinessIntelligenceDashboard:
-    def __init__(self, analysis_results: Dict):
+    """
+    Dashboard for visualizing sentiment analysis and competitive positioning.
+    
+    Creates interactive charts and metrics using Streamlit and Plotly.
+    """
+    
+    def __init__(self, analysis_results: Dict[str, Any]):
         self.results = analysis_results
     
     def create_sentiment_comparison(self):
@@ -67,11 +78,61 @@ class BusinessIntelligenceDashboard:
                 avg_neutral = sentiment_data['neutral'].mean()
                 st.metric("Average Neutral Confidence", f"{avg_neutral:.3f}")
     
+    def create_topic_analysis(self):
+        """Display topic modeling results"""
+        st.header("📚 Topic Analysis")
+        
+        topics = self.results.get('topics', {})
+        topic_distributions = self.results.get('topic_distributions', pd.DataFrame())
+        
+        if not topics:
+            st.warning("No topic data available")
+            return
+        
+        # Display top topics
+        st.subheader("Identified Topics")
+        cols = st.columns(min(3, len(topics)))
+        
+        for idx, (topic_id, words) in enumerate(topics.items()):
+            with cols[idx % 3]:
+                st.write(f"**Topic {topic_id}**")
+                for word in words[:5]:
+                    st.write(f"• {word}")
+        
+        # Topic distribution heatmap
+        if not topic_distributions.empty:
+            st.subheader("Topic Distribution")
+            
+            # Create heatmap
+            topic_dist_sample = topic_distributions.head(50)
+            fig = px.imshow(
+                topic_dist_sample.T,
+                labels=dict(x="Document", y="Topic", color="Probability"),
+                title="Topic Distribution Across Reviews",
+                color_continuous_scale="Viridis"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Topic prevalence
+            st.subheader("Topic Prevalence")
+            topic_means = topic_distributions.mean().sort_values(ascending=False)
+            fig_bar = px.bar(
+                x=topic_means.index,
+                y=topic_means.values,
+                labels={'x': 'Topic', 'y': 'Average Probability'},
+                title='Average Topic Probability Across All Reviews'
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+    
     def create_competitive_analysis(self):
-        """Enhanced competitive analysis"""
+        """Enhanced competitive analysis visualization"""
         st.header("🏆 Competitive Positioning")
         
-        comp_data = self.results['competitive_analysis']
+        comp_data = self.results['competitive_analysis'].copy()
+        
+        if comp_data.empty:
+            st.warning("No competitive data available")
+            return
         
         # Bubble chart: Sentiment vs Volume vs Rating
         fig = px.scatter(
@@ -82,13 +143,26 @@ class BusinessIntelligenceDashboard:
             color='product',
             hover_name='product',
             size_max=60,
-            title='Competitive Positioning: Sentiment vs Volume (Size = Avg Rating)'
+            title='Competitive Positioning: Sentiment vs Volume (Size = Avg Rating)',
+            labels={
+                'review_volume': 'Review Volume',
+                'avg_sentiment': 'Average Sentiment Score',
+                'avg_rating': 'Average Rating'
+            }
         )
         fig.update_traces(marker=dict(opacity=0.7))
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
         
         # Performance metrics table
         st.subheader("Performance Metrics")
-        comp_data['sentiment_rank'] = comp_data['avg_sentiment'].rank(ascending=False)
-        comp_data['volume_rank'] = comp_data['review_volume'].rank(ascending=False)
-        st.dataframe(comp_data.style.highlight_max(subset=['avg_sentiment', 'review_volume']))
+        comp_data['sentiment_rank'] = comp_data['avg_sentiment'].rank(ascending=False).astype(int)
+        comp_data['volume_rank'] = comp_data['review_volume'].rank(ascending=False).astype(int)
+        
+        display_cols = ['product', 'avg_sentiment', 'review_volume', 'avg_rating', 'sentiment_rank', 'volume_rank']
+        st.dataframe(
+            comp_data[display_cols].style.highlight_max(
+                subset=['avg_sentiment', 'review_volume'],
+                color='lightgreen'
+            ),
+            use_container_width=True
+        )
